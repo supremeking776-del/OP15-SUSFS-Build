@@ -224,19 +224,36 @@ jobs:
       - name: Patch Python 2 scripts to Python 3
         working-directory: kernel
         run: |
-          # OnePlus 4.19 kernel build scripts use Python 2 print syntax.
-          # Convert them in place so the Python 3 default on ubuntu-22.04 works.
           sudo apt-get install -y --no-install-recommends 2to3 || true
           if [ -f scripts/gcc-wrapper.py ]; then
             2to3 -w -n -W scripts/gcc-wrapper.py || true
           fi
-          # Also convert any other obvious Python 2 script in scripts/
           find scripts -maxdepth 2 -name '*.py' -print0 | while IFS= read -r -d '' f; do
             if grep -Eq '^[[:space:]]*print[[:space:]]+["'\'']' "$f" 2>/dev/null; then
               2to3 -w -n -W "$f" || true
             fi
           done
           echo "[+] Python 2 -> 3 conversion done"
+
+      - name: Stub missing Kconfig source references (OPlus public-source gaps)
+        working-directory: kernel
+        run: |
+          # OnePlus's public source tree references some OPlus-internal Kconfig
+          # files that are not shipped (e.g. kernel/sched_assist/Kconfig).
+          # Walk all source "..." statements, and if the file is missing,
+          # create an empty Kconfig stub at that path.
+          STUBBED=0
+          # find any 'source "..."' or "source '...'" reference in Kconfig files
+          while IFS= read -r line; do
+            kf=$(echo "$line" | sed -E 's/.*source[[:space:]]+["'\'']([^"'\'' ]+)["'\''].*/\1/')
+            [ -z "$kf" ] && continue
+            [ -f "$kf" ] && continue
+            mkdir -p "$(dirname "$kf")"
+            : > "$kf"
+            echo "  stubbed: $kf"
+            STUBBED=$((STUBBED+1))
+          done < <(grep -RhE '^[[:space:]]*source[[:space:]]+["'\'']' --include=Kconfig\* . 2>/dev/null)
+          echo "[+] Stubbed $STUBBED missing Kconfig source(s)"
 
       - name: Configure defconfig (KSU + SUSFS + version)
         working-directory: kernel
