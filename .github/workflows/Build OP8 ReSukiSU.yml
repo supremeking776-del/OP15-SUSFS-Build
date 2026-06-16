@@ -142,8 +142,27 @@ jobs:
         run: |
           curl -fsSL -o /tmp/kernel-4.19.patch \
             https://raw.githubusercontent.com/ReSukiSU/ReSukiSU_Patches/main/scope-minimized/kernel-4.19.patch
-          patch -p1 --no-backup-if-mismatch < /tmp/kernel-4.19.patch
-          echo "[+] Manual scope-minimized hook applied for kernel 4.19"
+
+          # Apply with extra fuzz; tolerate per-hunk failures (vendor diffs in OnePlus CAF)
+          set +e
+          patch -p1 -F5 --no-backup-if-mismatch -r /tmp/patch.rej \
+            < /tmp/kernel-4.19.patch | tee /tmp/patch.out
+          PATCH_RC=$?
+          set -e
+
+          # Manual fallback for kernel/reboot.c (vendor adds check_poweroff_charger_mode)
+          if ! grep -q 'ksu_handle_sys_reboot' kernel/reboot.c; then
+            echo "[!] Injecting reboot hook manually"
+            python3 "$GITHUB_WORKSPACE/workflow_repo/patches/op8/inject_reboot_hook.py"
+          fi
+
+          # Sanity: confirm the four critical hooks are wired
+          for sym in ksu_handle_execveat ksu_handle_faccessat ksu_handle_stat ksu_handle_sys_reboot; do
+            if ! grep -rqE "$sym" fs/exec.c fs/open.c fs/stat.c kernel/reboot.c 2>/dev/null; then
+              echo "::error::Hook $sym missing after patch"; exit 1
+            fi
+          done
+          echo "[+] All scope-minimized hooks present"
 
       - name: Apply SUSFS patches (kernel-4.19)
         if: ${{ inputs.ENABLE_SUSFS == true }}
