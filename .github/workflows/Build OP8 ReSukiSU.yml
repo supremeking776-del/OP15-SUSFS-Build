@@ -224,16 +224,34 @@ jobs:
       - name: Configure defconfig (KSU + SUSFS + version)
         working-directory: kernel
         run: |
-          DEF_FILE="arch/arm64/configs/vendor/${{ inputs.DEVICE }}_defconfig"
-          if [ ! -f "$DEF_FILE" ]; then
-            DEF_FILE="arch/arm64/configs/${{ inputs.DEVICE }}_defconfig"
-          fi
-          if [ ! -f "$DEF_FILE" ]; then
-            echo "ERROR: defconfig for ${{ inputs.DEVICE }} not found" >&2
+          # OP8 family (instantnoodle/instantnoodlep/kebab) all use SoC-level
+          # vendor/kona-perf_defconfig in OOS12/OOS13. Older sources may have
+          # per-device defconfigs, so try those first.
+          CANDIDATES=(
+            "arch/arm64/configs/vendor/${{ inputs.DEVICE }}_defconfig"
+            "arch/arm64/configs/${{ inputs.DEVICE }}_defconfig"
+            "arch/arm64/configs/vendor/kona-perf_defconfig"
+            "arch/arm64/configs/kona-perf_defconfig"
+          )
+          DEF_FILE=""
+          for c in "${CANDIDATES[@]}"; do
+            if [ -f "$c" ]; then
+              DEF_FILE="$c"
+              break
+            fi
+          done
+          if [ -z "$DEF_FILE" ]; then
+            echo "ERROR: no usable defconfig found for ${{ inputs.DEVICE }}" >&2
+            echo "----- arch/arm64/configs/ -----"
+            ls arch/arm64/configs/ || true
+            echo "----- arch/arm64/configs/vendor/ -----"
             ls arch/arm64/configs/vendor/ || true
             exit 1
           fi
           echo "Using defconfig: $DEF_FILE"
+          # Pass the file name (relative to arch/arm64/configs) to the build step
+          DEF_REL="${DEF_FILE#arch/arm64/configs/}"
+          echo "DEF_REL=$DEF_REL" >> $GITHUB_ENV
 
           {
             echo ""
@@ -287,8 +305,7 @@ jobs:
           export ARCH=arm64 SUBARCH=arm64
           export KBUILD_BUILD_TIMESTAMP="$(date -u '+%a %b %d %H:%M:%S UTC %Y')"
 
-          make O=out ARCH=arm64 vendor/${{ inputs.DEVICE }}_defconfig \
-            || make O=out ARCH=arm64 ${{ inputs.DEVICE }}_defconfig
+          make O=out ARCH=arm64 "${DEF_REL}"
 
           make -j"$(nproc)" O=out ARCH=arm64 \
             CC="ccache clang" \
