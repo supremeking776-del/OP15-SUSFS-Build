@@ -221,6 +221,23 @@ jobs:
             done
           fi
 
+      - name: Patch Python 2 scripts to Python 3
+        working-directory: kernel
+        run: |
+          # OnePlus 4.19 kernel build scripts use Python 2 print syntax.
+          # Convert them in place so the Python 3 default on ubuntu-22.04 works.
+          sudo apt-get install -y --no-install-recommends 2to3 || true
+          if [ -f scripts/gcc-wrapper.py ]; then
+            2to3 -w -n -W scripts/gcc-wrapper.py || true
+          fi
+          # Also convert any other obvious Python 2 script in scripts/
+          find scripts -maxdepth 2 -name '*.py' -print0 | while IFS= read -r -d '' f; do
+            if grep -Eq '^[[:space:]]*print[[:space:]]+["'\'']' "$f" 2>/dev/null; then
+              2to3 -w -n -W "$f" || true
+            fi
+          done
+          echo "[+] Python 2 -> 3 conversion done"
+
       - name: Configure defconfig (KSU + SUSFS + version)
         working-directory: kernel
         run: |
