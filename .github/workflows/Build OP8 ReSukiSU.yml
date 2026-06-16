@@ -96,7 +96,7 @@ jobs:
             bc bison build-essential ccache curl flex git \
             libelf-dev liblz4-tool libssl-dev libxml2-utils lzop \
             python3 python3-pip python-is-python3 zip cpio rsync \
-            kmod libncurses-dev pkg-config xz-utils
+            kmod libncurses-dev pkg-config xz-utils wiggle patchutils
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -170,14 +170,45 @@ jobs:
           git clone --depth=1 -b kernel-4.19 \
             https://gitlab.com/simonpunk/susfs4ksu.git susfs
           cd kernel
-          # Copy file/dir from susfs into the kernel tree
           cp -v ../susfs/kernel_patches/fs/* fs/
           cp -v ../susfs/kernel_patches/include/linux/* include/linux/
-          # Apply susfs base patch
-          patch -p1 --no-backup-if-mismatch < ../susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch
-          # Apply susfs->KernelSU integration patch
-          (cd KernelSU && patch -p1 --no-backup-if-mismatch < ../../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch) || true
-          echo "[+] SUSFS (kernel-4.19) applied"
+
+          # Apply with high fuzz, tolerate per-hunk failures (vendor diffs in OnePlus CAF)
+          set +e
+          patch -p1 -F10 --no-backup-if-mismatch \
+            < ../susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch \
+            > /tmp/susfs_patch.log 2>&1
+          set -e
+          tail -n 40 /tmp/susfs_patch.log
+
+          # Auto-merge any rejected hunks with wiggle
+          REJECTS=$(find . -name '*.rej' -type f)
+          if [ -n "$REJECTS" ]; then
+            echo "::group::Wiggle merge of rejected hunks"
+            FAILED=0
+            for rej in $REJECTS; do
+              src="${rej%.rej}"
+              echo "wiggle merge: $src"
+              if wiggle --replace --merge "$src" "$rej"; then
+                rm -f "$rej" "${src}.porig"
+                echo "  -> merged"
+              else
+                FAILED=1
+                echo "::warning::wiggle could NOT auto-merge $src (kept .rej for manual inspection)"
+                cat "$rej"
+              fi
+            done
+            echo "::endgroup::"
+            if [ "$FAILED" -ne 0 ]; then
+              echo "::warning::Some SUSFS hunks remain unresolved; the build step will surface any compile errors."
+            fi
+          fi
+
+          # Apply susfs->KernelSU integration patch (already tolerant)
+          (cd KernelSU && patch -p1 -F5 --no-backup-if-mismatch \
+            < ../../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch) || true
+
+          echo "[+] SUSFS (kernel-4.19) integration done"
 
       - name: Apply repo-level extra patches (if any)
         working-directory: kernel
